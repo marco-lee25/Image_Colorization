@@ -1,13 +1,18 @@
 import os 
 import numpy as np
 import torch
+import gc
+from torch.utils.data import Dataset
+from skimage.color import rgb2lab, lab2rgb
+from torchvision import transforms
 
-def get_data(ab_path = "./ab/ab/ab1.npy", l_path = "./l/gray_scale.npy"):
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def get_data(ab_path = "./data/ab/ab/ab1.npy", l_path = "./data/l/gray_scale.npy"):
     ab_df = np.load(ab_path)[0:5000]
     L_df = np.load(l_path)[0:5000]
-    dataset = (L_df,ab_df )
+    dataset = (L_df,ab_df)
     gc.collect()
-
     return dataset
 
 def lab_to_rgb(L, ab):
@@ -22,3 +27,59 @@ def lab_to_rgb(L, ab):
         img_rgb = lab2rgb(img)
         rgb_imgs.append(img_rgb)
     return np.stack(rgb_imgs, axis=0)
+
+class ImageColorizationDataset(Dataset):
+    ''' Black and White (L) Images and corresponding A&B Colors'''
+    def __init__(self, dataset, transform=None):
+        '''
+        :param dataset: Dataset name.
+        :param data_dir: Directory with all the images.
+        :param transform: Optional transform to be applied on sample
+        '''
+        self.dataset = dataset
+        self.data = transforms.ToTensor()(dataset[0].reshape((224, 224, len(dataset[0])))).to(device)
+        self.target = dataset[1]
+
+        self.data = []
+        self.target = []
+        for id in range(len(dataset[0])):
+            L = np.array(self.dataset[0][id]).reshape((224,224,1))
+            L = transforms.ToTensor()(L)
+            self.data.append(L)
+
+        for id in range(len(dataset[1])):
+            ab = np.array(self.dataset[1][id])
+            ab = transforms.ToTensor()(ab)
+            self.target.append(ab)
+        
+        # for x in dataset[1]:
+        #      self.target.append(x)
+        # tmp = []
+        # for i in dataset[1]:
+        #     tmp.append(transforms.ToTensor()(i))
+        # tmp = torch.from_numpy(np.array(tmp))
+        # print(tmp[0].shape)
+        # exit()
+        # self.target = np.array(self.target)
+        # self.target = torch.from_numpy(dataset[1]).to(device)
+        
+
+        # self.target = torch.from_numpy(dataset[1]).to(device)
+        
+        # self.data =  torch.from_numpy(dataset[0])
+        # self.target = torch.from_numpy(dataset[1])
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.dataset[0])
+    
+    def __getitem__(self, idx):
+        # L = np.array(self.dataset[0][idx]).reshape((224,224,1))
+        # L = transforms.ToTensor()(L)
+        # ab = np.array(self.dataset[1][idx])
+        # ab = transforms.ToTensor()(ab)
+
+        L = self.data[idx]
+        ab = self.target[idx]
+        return ab, L
+
