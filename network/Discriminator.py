@@ -36,14 +36,15 @@ class Discriminator(nn.Module):
         model += [self.get_layers(num_filters * 2 ** n_down, 1, stride=1, norm=False, activation=False)] 
         self.model = nn.Sequential(*model)
     
-    def get_layers(self, ni, nf): 
-        kernel_size=self.Config.kernel_size
-        stride=self.Config.stride
-        padding=self.Config.padding
-        LeakyReLU_slope = self.Config.LeakyReLU_slope
+    def get_layers(self, ni, nf, kernel_size=None, stride=None, padding=None, norm=True, activation=True): 
+        if kernel_size == None:
+            kernel_size=self.Config.kernel_size
+        if stride == None:
+            stride=self.Config.stride
+        if padding == None:
+            padding=self.Config.padding
 
-        norm=True
-        activation=True
+        LeakyReLU_slope = self.Config.LeakyReLU_slope
 
         layers = [nn.Conv2d(ni, nf, kernel_size, stride, padding, bias=not norm)]          
         if norm: 

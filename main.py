@@ -58,6 +58,7 @@ if __name__ == "__main__":
     valid_loader = DataLoader(valid_data, batch_size=Config.batch_size,shuffle=False,pin_memory = True)
 
     trainer = trainer.model_trainer(train_loader, 1, 2, Config)
+    print("========== Start Training ============")
     trainer.train_model()
 
     model = trainer.get_model()

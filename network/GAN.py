@@ -78,10 +78,10 @@ class MainModel(nn.Module):
         self.lambda_l1 = lambda_l1
         
         if generator is None:
-            self.generator = init_model(Unet(config, input_channels=1, output_channels=2, n_down=8, num_filters=64),self.device)
+            self.generator = init_model(Unet(Config, input_channels=1, output_channels=2, n_down=8, num_filters=64),self.device)
         else:
             self.generator = generator.to(self.device)
-        self.discriminator = init_model(Discriminator(input_channels = 3,num_filters = 64,n_down = 3),self.device)
+        self.discriminator = init_model(Discriminator(Config, input_channels = 3,num_filters = 64,n_down = 3),self.device)
         self.GANloss = GANLoss(gan_mode=Config.gan_mode).to(self.device)
         self.L1loss = nn.L1Loss()
         self.gen_optim = optim.Adam(self.generator.parameters(), lr=gen_lr, betas=(beta1, beta2))

@@ -16,5 +16,5 @@ class Config:
     lambda_l1 = 100
     gan_mode = 'vanilla'
     layers_to_cut = -2
-    epochs = 20
+    epochs = 5
     pretrain_lr = 1e-4
