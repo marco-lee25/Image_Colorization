@@ -1,95 +1,86 @@
+import os
+from pathlib import Path
+import glob
+import time
+import numpy as np
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+
+import PIL
+from PIL import Image
+from skimage.color import rgb2lab, lab2rgb
+
 import torch
 from torch import nn, optim
 from torchvision import transforms
+from torchvision.models.resnet import resnet18
+from torchvision.models.vgg import vgg19
 from torch.utils.data import Dataset, DataLoader
-from torch.autograd import Variable
-from torchvision import models
-from torch.nn import functional as F
-import torch.utils.data
-from torchvision.models.inception import inception_v3
-from scipy.stats import entropy
-from torchsummary import summary
-from tqdm import tqdm
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-class ResBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, stride=1):
+class UnetBlock(nn.Module):
+    '''
+    
+    Class that helps define the various different types of blocks used in the Generator architecture
+    
+    '''
+    
+    def __init__(self, Config, nf, ni, submodule=None, input_channels=None, dropout=False,innermost=False, outermost=False):
         super().__init__()
-        self.layer = nn.Sequential(
-            nn.Conv2d(in_channels,out_channels,kernel_size=3, padding=1, stride=stride, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels,kernel_size=3,padding=1, stride=1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True)
-        )
-        self.identity_map = nn.Conv2d(in_channels, out_channels,kernel_size=1,stride=stride)
-        self.relu = nn.ReLU(inplace=True)
+        self.outermost = outermost
+        if input_channels is None: 
+            input_channels = nf
+        downconv = nn.Conv2d(input_channels, ni, kernel_size=Config.kernel_size, stride=Config.stride, padding=Config.padding, bias=False)
+        downrelu = nn.LeakyReLU(Config.LeakyReLU_slope, True)
+        downnorm = nn.BatchNorm2d(ni)
+        uprelu = nn.ReLU(True)
+        upnorm = nn.BatchNorm2d(nf)
         
-    def forward(self, inputs):
-        x = inputs.clone().detach()
-        out = self.layer(x)
-        residual  = self.identity_map(inputs)
-        skip = out + residual
-        return self.relu(skip)
+        if outermost:
+            upconv = nn.ConvTranspose2d(ni * 2, nf,kernel_size=Config.kernel_size, stride=Config.stride, padding=Config.padding)
+            down = [downconv]
+            up = [uprelu, upconv, nn.Tanh()]
+            model = down + [submodule] + up
+        elif innermost:
+            upconv = nn.ConvTranspose2d(ni, nf, kernel_size=Config.kernel_size, stride=Config.stride, padding=Config.padding, bias=False)
+            down = [downrelu, downconv]
+            up = [uprelu, upconv, upnorm]
+            model = down + up
+        else:
+            upconv = nn.ConvTranspose2d(ni * 2, nf, kernel_size=Config.kernel_size, stride=Config.stride, padding=Config.padding, bias=False)
+            down = [downrelu, downconv, downnorm]
+            up = [uprelu, upconv, upnorm]
+            if dropout: up += [nn.Dropout(Config.dropout)]
+            model = down + [submodule] + up
 
-class DownSampleConv(nn.Module):
-    def __init__(self, in_channels, out_channels, stride=1):
+        self.model = nn.Sequential(*model)
+    
+    def forward(self, x):
+        if self.outermost:
+            return self.model(x)
+        else:
+            return torch.cat([x, self.model(x)], 1)
+
+    
+class Unet(nn.Module):
+    '''
+    
+    The Generator Model Class
+    
+    '''
+    
+    def __init__(self, config, input_channels=1, output_channels=2, n_down=8, num_filters=64):
         super().__init__()
-        self.layer = nn.Sequential(
-            nn.MaxPool2d(2),
-            ResBlock(in_channels, out_channels)
-        )
-        
-    def forward(self, inputs):
-        return self.layer(inputs)
-
-class UpSampleConv(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.upsample = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-        self.res_block = ResBlock(in_channels + out_channels, out_channels)
-        
-    def forward(self, inputs, skip):
-        x = self.upsample(inputs)
-        x = torch.cat([x, skip], dim=1)
-        x = self.res_block(x)
-        return x
-
-
-class Generator(nn.Module):
-    def __init__(self, input_channel, output_channel, dropout_rate = 0.2):
-        super().__init__()
-        self.encoding_layer1_ = ResBlock(input_channel,64)
-        self.encoding_layer2_ = DownSampleConv(64, 128)
-        self.encoding_layer3_ = DownSampleConv(128, 256)
-        self.bridge = DownSampleConv(256, 512)
-        self.decoding_layer3_ = UpSampleConv(512, 256)
-        self.decoding_layer2_ = UpSampleConv(256, 128)
-        self.decoding_layer1_ = UpSampleConv(128, 64)
-        self.output = nn.Conv2d(64, output_channel, kernel_size=1)
-        self.dropout = nn.Dropout2d(dropout_rate)
-        
-    def forward(self, inputs):
-        inputs = inputs.to(device)
-        ###################### Enocoder #########################
-        e1 = self.encoding_layer1_(inputs)
-        e1 = self.dropout(e1)
-        e2 = self.encoding_layer2_(e1)
-        e2 = self.dropout(e2)
-        e3 = self.encoding_layer3_(e2)
-        e3 = self.dropout(e3)
-        
-        ###################### Bridge #########################
-        bridge = self.bridge(e3)
-        bridge = self.dropout(bridge)
-        
-        ###################### Decoder #########################
-        d3 = self.decoding_layer3_(bridge, e3)
-        d2 = self.decoding_layer2_(d3, e2)
-        d1 = self.decoding_layer1_(d2, e1)
-        
-        ###################### Output #########################
-        output = self.output(d1)
-        return output
+        unet_block = UnetBlock(config, num_filters * 8, num_filters * 8, innermost=True)
+        for _ in range(n_down - 5):
+            unet_block = UnetBlock(config, num_filters * 8, num_filters * 8, submodule=unet_block, dropout=True)
+        out_filters = num_filters * 8
+        for _ in range(3):
+            unet_block = UnetBlock(config, out_filters // 2, out_filters, submodule=unet_block)
+            out_filters //= 2
+            
+        self.model = UnetBlock(config, output_channels, out_filters, input_channels=input_channels, submodule=unet_block, outermost=True)
+    
+    def forward(self, x):
+        return self.model(x)

@@ -1,44 +1,56 @@
+import os
+from pathlib import Path
+import glob
+import time
+import numpy as np
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+
+import PIL
+from PIL import Image
+from skimage.color import rgb2lab, lab2rgb
+
 import torch
 from torch import nn, optim
 from torchvision import transforms
+from torchvision.models.resnet import resnet18
+from torchvision.models.vgg import vgg19
 from torch.utils.data import Dataset, DataLoader
-from torch.autograd import Variable
-from torchvision import models
-from torch.nn import functional as F
-import torch.utils.data
-from torchvision.models.inception import inception_v3
-from scipy.stats import entropy
-from torchsummary import summary
-from tqdm import tqdm
+# from ..config import Config
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-class Critic(nn.Module):
-    def __init__(self, in_channels=3):
-        super(Critic, self).__init__()
+class Discriminator(nn.Module):
+    '''
+    
+    The Discriminator Model Class
+    
+    '''
+    
+    def __init__(self, Config, input_channels,num_filters=64, n_down=3):
+        super().__init__()
+        self.Config = Config
+        model = [self.get_layers(input_channels,num_filters,norm = False)]
+        model += [self.get_layers(num_filters * 2 ** i, num_filters * 2 ** (i + 1), stride=1 if i == (n_down-1) else 2) for i in range(n_down)]
+        model += [self.get_layers(num_filters * 2 ** n_down, 1, stride=1, norm=False, activation=False)] 
+        self.model = nn.Sequential(*model)
+    
+    def get_layers(self, ni, nf): 
+        kernel_size=self.Config.kernel_size
+        stride=self.Config.stride
+        padding=self.Config.padding
+        LeakyReLU_slope = self.Config.LeakyReLU_slope
 
-        def critic_block(in_filters, out_filters, normalization=True):
-            """Returns layers of each critic block"""
-            layers = [nn.Conv2d(in_filters, out_filters, 4, stride=2, padding=1)]
-            if normalization:
-                layers.append(nn.InstanceNorm2d(out_filters))
-            layers.append(nn.LeakyReLU(0.2, inplace=True))
-            return layers
+        norm=True
+        activation=True
 
-        self.model = nn.Sequential(
-            *critic_block(in_channels, 64, normalization=False),
-            *critic_block(64, 128),
-            *critic_block(128, 256),
-            *critic_block(256, 512),
-            nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
-            nn.Linear(512, 1)
-        )
-
-    def forward(self, ab, l):
-        # Concatenate image and condition image by channels to produce input
-        # ab = ab.to(device)
-        # l = l.to(device)
-        img_input = torch.cat((ab, l), 1)
-        output = self.model(img_input)
-        return output
+        layers = [nn.Conv2d(ni, nf, kernel_size, stride, padding, bias=not norm)]          
+        if norm: 
+            layers += [nn.BatchNorm2d(nf)]
+        if activation:
+            layers += [nn.LeakyReLU(LeakyReLU_slope, True)]
+        return nn.Sequential(*layers)
+    
+    def forward(self, x):
+        return self.model(x)

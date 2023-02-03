@@ -1,253 +1,133 @@
+import os
+from pathlib import Path
+import glob
+import time
+import numpy as np
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+
+import PIL
+from PIL import Image
+from skimage.color import rgb2lab, lab2rgb
+
 import torch
 from torch import nn, optim
 from torchvision import transforms
+from torchvision.models.resnet import resnet18
+from torchvision.models.vgg import vgg19
 from torch.utils.data import Dataset, DataLoader
-from torch.autograd import Variable
-from torchvision import models
-from torch.nn import functional as F
-import torch.utils.data
-from torchvision.models.inception import inception_v3
-from scipy.stats import entropy
-from torchsummary import summary
-from tqdm import tqdm
-from skimage.color import rgb2lab, lab2rgb
-from .Discriminator import Critic
-from .Generator import Generator
+from fastai.vision.learner import create_body
+from fastai.vision.models.unet import DynamicUnet
 
-import numpy as np
-import pytorch_lightning as pl
-import matplotlib.pyplot as plt
-import matplotlib
+from .utils import AverageMeter, init_model
+from .Discriminator import Discriminator
+from .Generator import Unet
+from .loss import GANLoss
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# https://stackoverflow.com/questions/49433936/how-to-initialize-weights-in-pytorch
-def _weights_init(m):
-    if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d)):
-        torch.nn.init.normal_(m.weight, 0.0, 0.02)
-
-    if isinstance(m, nn.BatchNorm2d):
-        torch.nn.init.normal_(m.weight, 0.0, 0.02)
-        torch.nn.init.constant_(m.bias, 0)
-
-def display_progress(cond, real, fake, current_epoch = 0, figsize=(20,15)):
-    """
-    Save cond, real (original) and generated (fake)
-    images in one panel 
-    """
-    cond = cond.detach().cpu().permute(1, 2, 0)   
-    real = real.detach().cpu().permute(1, 2, 0)
-    fake = fake.detach().cpu().permute(1, 2, 0)
+def build_backbone_unet(input_channels, output_channels, size, layers_to_cut):
+    '''
     
-    images = [cond, real, fake]
-    titles = ['input','real','generated']
-    print(f'Epoch: {current_epoch}')
-    fig, ax = plt.subplots(1, 3, figsize=figsize)
-    for idx,img in enumerate(images):
-        if idx == 0:
-            ab = torch.zeros((224,224,2))
-            img = torch.cat([images[0]* 100, ab], dim=2).numpy()
-            imgan = lab2rgb(img)
-        else:
-            imgan = lab_to_rgb(images[0],img)
-        ax[idx].imshow(imgan)
-        ax[idx].axis("off")
-    for idx, title in enumerate(titles):    
-        ax[idx].set_title('{}'.format(title))
+    Function that helps build the generator backbone using another pretrained model trained on imagenet for image classification
     
-    fig.savefig("./result/"+str(current_epoch)+".jpg")
-
-def lab_to_rgb(L, ab):
-    """
-    Takes an image or a batch of images and converts from LAB space to RGB
-    """
-    L = L  * 100
-    ab = (ab - 0.5) * 128 * 2
-    Lab = torch.cat([L, ab], dim=2).numpy()
-    rgb_imgs = []
-    for img in Lab:
-        img_rgb = lab2rgb(img)
-        rgb_imgs.append(img_rgb)
-    return np.stack(rgb_imgs, axis=0)
-
-
-# class CWGAN(torch.nn.Module):
-#     def __init__(self, in_channels, out_channels, learning_rate=0.0002, lambda_recon=100, display_step=10, lambda_gp=10, lambda_r1=10, device='cpu'):
-#         super().__init__()
-
-#         # self.save_hyperparameters()
-        
-#         self.display_step = display_step
-        
-#         self.generator = Generator(in_channels, out_channels).to(device)
-#         self.critic = Critic(in_channels + out_channels).to(device)
-
-#         self.optimizer_G = optim.Adam(self.generator.parameters(), lr=learning_rate, betas=(0.5, 0.9))
-#         self.optimizer_C = optim.Adam(self.critic.parameters(), lr=learning_rate, betas=(0.5, 0.9))
-
-#         self.lambda_recon = lambda_recon
-
-#         self.lambda_gp = lambda_gp
-
-#         self.lambda_r1 = lambda_r1
-
-#         self.recon_criterion = nn.L1Loss().to(device)
-#         self.generator_losses, self.critic_losses  =[],[]
-
-#     def configure_optimizers(self):
-#         return [self.optimizer_C, self.optimizer_G]
-
-#     def generator_step(self, real_images, conditioned_images):
-#         # WGAN has only a reconstruction loss
-#         self.optimizer_G.zero_grad()
-#         fake_images = self.generator(conditioned_images)
-#         recon_loss = self.recon_criterion(fake_images, real_images)
-#         recon_loss.backward()
-#         self.optimizer_G.step()
-#         # Keep track of the average generator loss
-#         self.generator_losses += [recon_loss.item()]
-
-#     def critic_step(self, real_images, conditioned_images):
-#         self.optimizer_C.zero_grad()
-#         fake_images = self.generator(conditioned_images)
-#         fake_logits = self.critic(fake_images, conditioned_images)
-#         real_logits = self.critic(real_images, conditioned_images)
-#         # Compute the loss for the critic
-#         loss_C = real_logits.mean() - fake_logits.mean()
-
-#         # Compute the gradient penalty
-#         alpha = torch.rand(real_images.size(0), 1, 1, 1, requires_grad=True)
-#         alpha = alpha.to(device)
- 
-#         interpolated = (alpha * real_images + (1 - alpha) * fake_images.detach()).requires_grad_(True)
-        
-#         interpolated_logits = self.critic(interpolated, conditioned_images)
-        
-#         grad_outputs = torch.ones_like(interpolated_logits, dtype=torch.float32, requires_grad=True)
-#         gradients = torch.autograd.grad(outputs=interpolated_logits, inputs=interpolated, grad_outputs=grad_outputs,create_graph=True, retain_graph=True)[0]
-
-#         gradients = gradients.view(len(gradients), -1)
-#         gradients_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
-#         loss_C += self.lambda_gp * gradients_penalty
-        
-#         # Compute the R1 regularization loss
-#         r1_reg = gradients.pow(2).sum(1).mean()
-#         loss_C += self.lambda_r1 * r1_reg
-
-#         # Backpropagation
-#         loss_C.backward()
-#         self.optimizer_C.step()
-#         self.critic_losses += [loss_C.item()]
-
-#     def get_loss(self):
-#         gen_mean = sum(self.generator_losses[-self.display_step:]) / self.display_step
-#         crit_mean = sum(self.critic_losses[-self.display_step:]) / self.display_step
-#         return gen_mean, crit_mean
-
-#     def forward(self, batch, batch_idx, optimizer_idx, epoch):
-#         real, condition = batch
-#         if optimizer_idx == 0:
-#             self.critic_step(real, condition)
-#         elif optimizer_idx == 1:
-#             self.generator_step(real, condition)
-
-#         gen_mean = sum(self.generator_losses[-self.display_step:]) / self.display_step
-#         crit_mean = sum(self.critic_losses[-self.display_step:]) / self.display_step
-#         if batch_idx%20 == 0:
-#             print(f"Epoch {epoch} : Batch id : {batch_idx}, Generator loss: {gen_mean}, Critic loss: {crit_mean}")
-
-#         if batch_idx%450 == 0:
-#             fake = self.generator(condition).detach()
-#             print("save figure")
-#             display_progress(condition[0], real[0], fake[0], epoch)
+    '''
     
-#         if epoch & 30 == 0:
-#             torch.save(self.generator.state_dict(), "ResUnet_"+ str(epoch) +".pt")
-#             torch.save(self.critic.state_dict(), "PatchGAN_"+ str(epoch) +".pt")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    body = create_body(resnet18(), pretrained=True, n_in=input_channels, cut=layers_to_cut)
+    generator = DynamicUnet(body, output_channels, (size, size)).to(device)
+    return generator
 
-#         # if epoch%self.display_step==0 and batch_idx==0 and optimizer_idx==1:
-#         #     fake = self.generator(condition).detach()
-#         #     torch.save(self.generator.state_dict(), "ResUnet_"+ str(epoch) +".pt")
-#         #     torch.save(self.critic.state_dict(), "PatchGAN_"+ str(epoch) +".pt")
-#         #     print(f"Epoch {epoch} : Generator loss: {gen_mean}, Critic loss: {crit_mean}")
+def pretrain_generator(generator, train_dl, opt, criterion, epochs):
+    '''
+    
+    Function to pretrain the generator in a supervised manner on the colorization task using L1 Loss.
+    
+    '''
+    
+    for e in range(epochs):
+        loss_meter = AverageMeter()
+        for data in tqdm(train_dl):
+            L, ab = data['L'].to(device), data['ab'].to(device)
+            preds = generator(L)
+            loss = criterion(preds, ab)
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            
+            loss_meter.update(loss.item(), L.size(0))
+            
+        print(f"Epoch {e + 1}/{epochs}")
+        print(f"L1 Loss: {loss_meter.avg:.5f}")
 
-class CWGAN(pl.LightningModule):
-
-    def __init__(self, in_channels, out_channels, learning_rate=0.0002, lambda_recon=100, display_step=10, lambda_gp=10, lambda_r1=10,):
-
+class MainModel(nn.Module):
+    '''
+    
+    The Class where it all comes together.
+    
+    '''
+    
+    def __init__(self, Config, generator = None):
         super().__init__()
-        self.save_hyperparameters()
+        gen_lr =Config.gen_lr
+        disc_lr = Config.disc_lr
+        beta1 = Config.beta1
+        beta2 = Config.beta2
+        lambda_l1 = Config.lambda_l1
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.lambda_l1 = lambda_l1
         
-        self.display_step = display_step
+        if generator is None:
+            self.generator = init_model(Unet(config, input_channels=1, output_channels=2, n_down=8, num_filters=64),self.device)
+        else:
+            self.generator = generator.to(self.device)
+        self.discriminator = init_model(Discriminator(input_channels = 3,num_filters = 64,n_down = 3),self.device)
+        self.GANloss = GANLoss(gan_mode=Config.gan_mode).to(self.device)
+        self.L1loss = nn.L1Loss()
+        self.gen_optim = optim.Adam(self.generator.parameters(), lr=gen_lr, betas=(beta1, beta2))
+        self.disc_optim= optim.Adam(self.discriminator.parameters(), lr=disc_lr, betas=(beta1, beta2))
         
-        self.generator = Generator(in_channels, out_channels)
-        self.critic = Critic(in_channels + out_channels)
-        self.optimizer_G = optim.Adam(self.generator.parameters(), lr=learning_rate, betas=(0.5, 0.9))
-        self.optimizer_C = optim.Adam(self.critic.parameters(), lr=learning_rate, betas=(0.5, 0.9))
-        self.lambda_recon = lambda_recon
-        self.lambda_gp = lambda_gp
-        self.lambda_r1 = lambda_r1
-        self.recon_criterion = nn.L1Loss()
-        self.generator_losses, self.critic_losses  =[],[]
+    def requires_grad(self,model,requires_grad = True):
+        for p in model.parameters():
+            p.requires_grad = requires_grad
+            
+    def prepare_input(self,data):
+        self.L = data['L'].to(self.device)
+        self.ab = data['ab'].to(self.device)
+        
+    def forward(self):
+        self.gen_output = self.generator(self.L)
+        
+    def disc_backward(self):
+        gen_image = torch.cat([self.L, self.gen_output], dim=1)
+        gen_image_preds = self.discriminator(gen_image.detach())
+        self.disc_loss_gen = self.GANloss(gen_image_preds, False)
+
+        real_image = torch.cat([self.L, self.ab], dim=1)
+        real_preds = self.discriminator(real_image)
+        self.disc_loss_real = self.GANloss(real_preds, True)
+
+        self.disc_loss = (self.disc_loss_gen + self.disc_loss_real) * 0.5
+        self.disc_loss.backward()
     
-    def configure_optimizers(self):
-        return [self.optimizer_C, self.optimizer_G]
+    def gen_backward(self):
+        gen_image = torch.cat([self.L, self.gen_output], dim=1)
+        gen_image_preds = self.discriminator(gen_image)
+        self.loss_G_GAN = self.GANloss(gen_image_preds, True)
+        self.loss_G_L1 = self.L1loss(self.gen_output, self.ab) * self.lambda_l1
+        self.loss_G = self.loss_G_GAN + self.loss_G_L1
+        self.loss_G.backward()
+    
+    def optimize(self):
+        self.forward()
+        self.discriminator.train()
+        self.requires_grad(self.discriminator, True)
+        self.disc_optim.zero_grad()
+        self.disc_backward()
+        self.disc_optim.step()
         
-    def generator_step(self, real_images, conditioned_images):
-        # WGAN has only a reconstruction loss
-        self.optimizer_G.zero_grad()
-        fake_images = self.generator(conditioned_images)
-        recon_loss = self.recon_criterion(fake_images, real_images)
-        recon_loss.backward()
-        self.optimizer_G.step()
-        
-        # Keep track of the average generator loss
-        self.generator_losses += [recon_loss.item()]
-        
-        
-    def critic_step(self, real_images, conditioned_images):
-        self.optimizer_C.zero_grad()
-        fake_images = self.generator(conditioned_images)
-        fake_logits = self.critic(fake_images, conditioned_images)
-        real_logits = self.critic(real_images, conditioned_images)
-        
-        # Compute the loss for the critic
-        loss_C = real_logits.mean() - fake_logits.mean()
-
-        # Compute the gradient penalty
-        alpha = torch.rand(real_images.size(0), 1, 1, 1, requires_grad=True)
-        alpha = alpha.to(device)
-        interpolated = (alpha * real_images + (1 - alpha) * fake_images.detach()).requires_grad_(True)
-        
-        interpolated_logits = self.critic(interpolated, conditioned_images)
-        
-        grad_outputs = torch.ones_like(interpolated_logits, dtype=torch.float32, requires_grad=True)
-        gradients = torch.autograd.grad(outputs=interpolated_logits, inputs=interpolated, grad_outputs=grad_outputs,create_graph=True, retain_graph=True)[0]
-
-        
-        gradients = gradients.view(len(gradients), -1)
-        gradients_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
-        loss_C += self.lambda_gp * gradients_penalty
-        
-        # Compute the R1 regularization loss
-        r1_reg = gradients.pow(2).sum(1).mean()
-        loss_C += self.lambda_r1 * r1_reg
-
-        # Backpropagation
-        loss_C.backward()
-        self.optimizer_C.step()
-        self.critic_losses += [loss_C.item()]
-        
-    def training_step(self, batch, batch_idx, optimizer_idx):
-        real, condition = batch
-        if optimizer_idx == 0:
-            self.critic_step(real, condition)
-        elif optimizer_idx == 1:
-            self.generator_step(real, condition)
-        gen_mean = sum(self.generator_losses[-self.display_step:]) / self.display_step
-        crit_mean = sum(self.critic_losses[-self.display_step:]) / self.display_step
-        if self.current_epoch%self.display_step==0 and batch_idx==0 and optimizer_idx==1:
-            fake = self.generator(condition).detach()
-            torch.save(self.generator.state_dict(), "ResUnet_"+ str(self.current_epoch) +".pt")
-            torch.save(self.critic.state_dict(), "PatchGAN_"+ str(self.current_epoch) +".pt")
-            print(f"Epoch {self.current_epoch} : Generator loss: {gen_mean}, Critic loss: {crit_mean}")
-            display_progress(condition[0], real[0], fake[0], self.current_epoch)
+        self.generator.train()
+        self.requires_grad(self.discriminator, False) 
+        self.gen_optim.zero_grad()
+        self.gen_backward()
+        self.gen_optim.step()
