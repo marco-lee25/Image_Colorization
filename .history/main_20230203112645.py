@@ -1,8 +1,8 @@
-from config import Config
+from . import config
 from utils import data_handler
 from torch.utils.data import DataLoader
-# from network.Generator import Generator
-# from network.Discriminator import Critic
+from network.Generator import Generator
+from network.Discriminator import Critic
 from skimage.color import rgb2lab, lab2rgb
 from torchsummary import summary
 from torchvision import transforms
@@ -12,7 +12,6 @@ from pathlib import Path
 from PIL import Image
 from fastai.data.external import untar_data, URLs
 from network import trainer
-from utils.data_handler import lab_to_rgb
 import PIL
 # import pytorch_lightning as pl
 import matplotlib.pyplot as plt
@@ -35,11 +34,11 @@ if __name__ == "__main__":
 
     # Train test split
     np.random.seed(42)
-    paths_subset = np.random.choice(paths, Config.external_data_size, replace=False) # choosing 10000 images randomly
-    random_idxs = np.random.permutation(Config.external_data_size) 
+    paths_subset = np.random.choice(paths, config.Config.external_data_size, replace=False) # choosing 10000 images randomly
+    random_idxs = np.random.permutation(config.Config.external_data_size) 
 
-    train_idxs = random_idxs[:Config.train_size] # choosing the first 8000 as training set
-    val_idxs = random_idxs[Config.train_size:] # choosing last 2000 as validation set
+    train_idxs = random_idxs[:config.Config.train_size] # choosing the first 8000 as training set
+    val_idxs = random_idxs[config.Config.train_size:] # choosing last 2000 as validation set
     train_paths = paths_subset[train_idxs]
     val_paths = paths_subset[val_idxs]
     
@@ -49,16 +48,16 @@ if __name__ == "__main__":
         ax.axis("off")
 
     #train dataset
-    train_data = data_handler.ImageDataset(paths = train_paths, config=Config, train=True)
+    train_data = data_handler.ImageDataset(paths = train_paths, train=True)
     # validation dataset
-    valid_data = data_handler.ImageDataset(paths = val_paths, config=Config, train=False)
+    valid_data = data_handler.ImageDataset(paths = val_paths, train=False)
     # train data loader
-    train_loader = DataLoader(train_data, batch_size=Config.batch_size,shuffle=True,pin_memory = True)
+    train_loader = DataLoader(train_data, batch_size=config.batch_size,shuffle=True,pin_memory = True)
     # validation data loader
-    valid_loader = DataLoader(valid_data, batch_size=Config.batch_size,shuffle=False,pin_memory = True)
+    valid_loader = DataLoader(valid_data, batch_size=config.batch_size,shuffle=False,pin_memory = True)
 
-    trainer = trainer.model_trainer(train_loader, 1, 2, Config)
-    trainer.train_model()
+    config = config.config
+    trainer = trainer.model_trainer(train_loader, 1, 2, config)
 
     model = trainer.get_model()
     path = "Path to Image"

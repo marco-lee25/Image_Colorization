@@ -1,8 +1,8 @@
 from config import Config
 from utils import data_handler
 from torch.utils.data import DataLoader
-# from network.Generator import Generator
-# from network.Discriminator import Critic
+from network.Generator import Generator
+from network.Discriminator import Critic
 from skimage.color import rgb2lab, lab2rgb
 from torchsummary import summary
 from torchvision import transforms

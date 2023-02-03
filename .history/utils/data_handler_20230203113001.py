@@ -4,6 +4,7 @@ import torch
 import gc
 import PIL
 from PIL import Image
+from ..config import Config
 from torch.utils.data import Dataset
 from skimage.color import rgb2lab, lab2rgb
 from torchvision import transforms
@@ -40,10 +41,10 @@ class ImageDataset(Dataset):
     
     def __init__(self,paths, config, train = True):
         if train == True:
-            self.transforms = transforms.Compose([transforms.Resize((config.image_size_1,config.image_size_2)),
+            self.transforms = transforms.Compose([transforms.Resize((Config.image_size_1,Config.image_size_2)),
                                                  transforms.RandomHorizontalFlip()]) # Basic Data Augmentation
         elif train == False:
-            self.transforms = transforms.Compose([transforms.Resize((config.image_size_1,config.image_size_2))])
+            self.transforms = transforms.Compose([transforms.Resize((Config.image_size_1,Config.image_size_2))])
             
         self.train = train
         self.paths = paths

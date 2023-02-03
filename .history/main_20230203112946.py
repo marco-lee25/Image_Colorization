@@ -1,8 +1,8 @@
 from config import Config
 from utils import data_handler
 from torch.utils.data import DataLoader
-# from network.Generator import Generator
-# from network.Discriminator import Critic
+from network.Generator import Generator
+from network.Discriminator import Critic
 from skimage.color import rgb2lab, lab2rgb
 from torchsummary import summary
 from torchvision import transforms
@@ -49,9 +49,9 @@ if __name__ == "__main__":
         ax.axis("off")
 
     #train dataset
-    train_data = data_handler.ImageDataset(paths = train_paths, config=Config, train=True)
+    train_data = data_handler.ImageDataset(paths = train_paths, config, train=True)
     # validation dataset
-    valid_data = data_handler.ImageDataset(paths = val_paths, config=Config, train=False)
+    valid_data = data_handler.ImageDataset(paths = val_paths, config, train=False)
     # train data loader
     train_loader = DataLoader(train_data, batch_size=Config.batch_size,shuffle=True,pin_memory = True)
     # validation data loader

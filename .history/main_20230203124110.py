@@ -11,7 +11,7 @@ from torch.utils.data.dataloader import default_collate
 from pathlib import Path
 from PIL import Image
 from fastai.data.external import untar_data, URLs
-from network import trainer
+from .network import trainer
 from utils.data_handler import lab_to_rgb
 import PIL
 # import pytorch_lightning as pl
