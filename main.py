@@ -19,8 +19,6 @@ LOG = logging.getLogger(__name__)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-
-
 if __name__ == "__main__":
     data = data_handler.get_data()
     L_df, ab_df = data[0], data[1]
